@@ -374,9 +374,12 @@ namespace Gelatinarm.Player
                 {
                     Logger.LogInformation(
                         "Subtitle change requested: {SubtitleDisplayTitle} (Index={SubtitleServerStreamIndex})", subtitle.DisplayTitle, subtitle.ServerStreamIndex);
-                    PrepareForPlaybackRestart();
+                    if (!_playbackControlService.TrySelectPlayerSubtitle(subtitle))
+                    {
+                        PrepareForPlaybackRestart();
+                        await _playbackControlService.ChangeSubtitleTrackAsync(subtitle);
+                    }
 
-                    await _playbackControlService.ChangeSubtitleTrackAsync(subtitle);
                     SelectedSubtitle = subtitle;
                 }
             }

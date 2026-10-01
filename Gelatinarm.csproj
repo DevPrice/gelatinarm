@@ -270,6 +270,7 @@
     <Compile Include="Player\ResumeStuckException.cs" />
     <Compile Include="Player\SeekCompletionCoordinator.cs" />
     <Compile Include="Player\SkipSegmentType.cs" />
+    <Compile Include="Player\TextSubtitlePresenter.cs" />
     <!-- Properties -->
     <Compile Include="Properties\AssemblyInfo.cs" />
     <!-- Search -->

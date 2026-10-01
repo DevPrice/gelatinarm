@@ -72,6 +72,16 @@ namespace Gelatinarm.Player
         /// </summary>
         Task ChangeAudioTrackAsync(AudioTrack audioTrack);
 
+        /// <summary>
+        ///     Shows the subtitle, or none, in the open stream when the player draws both it and the
+        ///     current one. False when either is burned in by the server; then
+        ///     <see cref="ChangeSubtitleTrackAsync" />.
+        /// </summary>
+        bool TrySelectPlayerSubtitle(SubtitleTrack subtitle);
+
+        /// <summary>
+        ///     Reopens the stream with the server applying the subtitle
+        /// </summary>
         Task ChangeSubtitleTrackAsync(SubtitleTrack subtitle);
 
         MediaSourceInfo GetCurrentMediaSource();
@@ -116,6 +126,7 @@ namespace Gelatinarm.Player
         private readonly IMediaSessionService _mediaSessionService;
         private readonly PlaybackResumeCoordinator _resumeCoordinator;
         private readonly PlaybackSourceResolver _sourceResolver;
+        private readonly TextSubtitlePresenter _textSubtitles;
         private bool _directPlayDisabledForSession;
         private MediaSourceInfo _currentMediaSource;
         private PlaybackProgressInfo_PlayMethod _playMethod = PlaybackProgressInfo_PlayMethod.DirectPlay;
@@ -146,6 +157,7 @@ namespace Gelatinarm.Player
             _mediaSessionService = mediaSessionService;
             _resumeCoordinator = new PlaybackResumeCoordinator(logger);
             _sourceResolver = new PlaybackSourceResolver(logger, apiClient, authService, deviceService);
+            _textSubtitles = new TextSubtitlePresenter(logger, authService);
         }
 
         public TimeSpan HlsManifestOffset { get; set; }
@@ -241,7 +253,8 @@ namespace Gelatinarm.Player
             Logger.LogDebug("[PLAYBACK-START] MediaSource State: {MediaSourceState}, IsOpen: {MediaSourceIsOpen}, " +
                                   "Duration: {DurationTotalSeconds}s", mediaSource?.State, mediaSource?.IsOpen,
                 mediaSource?.Duration?.TotalSeconds);
-            var playbackItem = new MediaPlaybackItem(mediaSource);
+            var playbackItem = _textSubtitles.CreatePlaybackItem(mediaSource, _currentMediaSource,
+                _playbackParams.Item.Id.Value, ShownSubtitleStreamIndex);
 
             // TIERED RESUME APPROACH:
             // Tier 1: StartTimeTicks was already sent to server in GetPlaybackInfoAsync
@@ -488,14 +501,41 @@ namespace Gelatinarm.Player
                 audioStreamIndex: audioTrack.ServerStreamIndex);
         }
 
+        public bool TrySelectPlayerSubtitle(SubtitleTrack subtitle)
+        {
+            var streamIndex = SubtitleStreamIndexOf(subtitle);
+
+            // A burned-in subtitle is part of the video: only a new stream takes it out
+            var shownIndex = ShownSubtitleStreamIndex;
+            var shownIsBurnedIn = shownIndex >= 0 && !TextSubtitlePresenter.IsDeliveredAsFile(
+                _currentMediaSource?.MediaStreams?.FirstOrDefault(s => s.Index == shownIndex));
+            if (shownIsBurnedIn || !_textSubtitles.TrySelect(streamIndex))
+            {
+                return false;
+            }
+
+            // The progress reports and any later restart name it
+            _playbackParams.SubtitleStreamIndex = streamIndex;
+            Logger.LogInformation("Subtitle {SubtitleStreamIndex} shown by the player, no restart", streamIndex);
+            return true;
+        }
+
         public Task ChangeSubtitleTrackAsync(SubtitleTrack subtitle)
         {
-            // Subtitles are burned in by the server, so enabling, changing and disabling all
-            // restart the stream; -1 asks for none.
             return RestartPlaybackAsync(
                 $"subtitle change to {subtitle.DisplayTitle}",
-                subtitleStreamIndex: subtitle.IsNoneOption ? -1 : subtitle.ServerStreamIndex);
+                subtitleStreamIndex: SubtitleStreamIndexOf(subtitle));
         }
+
+        private static int SubtitleStreamIndexOf(SubtitleTrack subtitle)
+        {
+            return subtitle.IsNoneOption ? -1 : subtitle.ServerStreamIndex;
+        }
+
+        // With no subtitle requested the server applies the user's default one and names it as
+        // the source's default; -1 is none
+        private int ShownSubtitleStreamIndex =>
+            _playbackParams?.SubtitleStreamIndex ?? _currentMediaSource?.DefaultSubtitleStreamIndex ?? -1;
 
         public PlaybackReport CreateReport(long positionTicks)
         {
@@ -525,6 +565,7 @@ namespace Gelatinarm.Player
                 _mediaPlayer.Source = null;
             }
 
+            _textSubtitles.Detach();
             _openStream?.Dispose();
             _openStream = null;
         }

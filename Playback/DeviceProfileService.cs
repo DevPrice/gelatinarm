@@ -29,7 +29,7 @@ namespace Gelatinarm.Playback
         ///     Whether the server will copy this source's video rather than re-encode it: HEVC the
         ///     console decodes, within the profile's picture, depth, level, profile, range and bitrate
         ///     limits (<paramref name="maxStreamingBitrateMbps" /> 0 meaning the console's own), and no
-        ///     subtitle chosen, since every subtitle is burned in.
+        ///     image subtitle chosen, since those are burned in.
         /// </summary>
         bool ExpectsVideoCopy(MediaSourceInfo source, int? subtitleStreamIndex, int maxStreamingBitrateMbps,
             bool hdrOnAnyDisplay);
@@ -37,10 +37,8 @@ namespace Gelatinarm.Playback
 
     public class DeviceProfileService : BaseService, IDeviceProfileService
     {
-        private static readonly string[] SubtitleFormats =
-        {
-            "srt", "subrip", "ass", "ssa", "vtt", "webvtt", "pgs", "pgssub", "dvdsub", "dvbsub"
-        };
+        private static readonly string[] TextSubtitleFormats = { "srt", "subrip", "ass", "ssa", "vtt", "webvtt" };
+        private static readonly string[] ImageSubtitleFormats = { "pgs", "pgssub", "dvdsub", "dvbsub" };
 
         private static readonly string[] HevcCodecs = { "hevc", "h265", "hev1", "hvc1" };
         private static readonly string[] HevcProfiles = { "main", "main 10", "main10", "dvhe.08" };
@@ -130,10 +128,13 @@ namespace Gelatinarm.Playback
             bool hdrOnAnyDisplay)
         {
             var video = source?.MediaStreams?.FirstOrDefault(s => s.Type == MediaStream_Type.Video);
-            if (video?.Codec == null || subtitleStreamIndex >= 0 ||
+            var subtitle = subtitleStreamIndex >= 0
+                ? source?.MediaStreams?.FirstOrDefault(s => s.Index == subtitleStreamIndex)
+                : null;
+            if (video?.Codec == null || (subtitle != null && subtitle.IsTextSubtitleStream != true) ||
                 !HevcCodecs.Contains(video.Codec, StringComparer.OrdinalIgnoreCase) || !HasHardwareDecode("hvc1"))
             {
-                return false; // a chosen subtitle is burned in by the server, which means a re-encode
+                return false; // an image subtitle is burned in by the server, which means a re-encode
             }
 
             var portrait = IsPortrait(source);
@@ -544,13 +545,19 @@ namespace Gelatinarm.Playback
 
         private static List<SubtitleProfile> GetSubtitleProfiles()
         {
-            // The player renders no subtitles itself: nothing enables the MediaPlaybackItem's
-            // timed-text tracks. So every format is Encode (burned in by the server). A
-            // selected subtitle therefore means a transcode; with no subtitle selected the
-            // file can still direct play. Declaring Embed here would let the server direct
-            // play with a subtitle selected, and the subtitle would never appear.
-            return SubtitleFormats
-                .Select(format => new SubtitleProfile { Format = format, Method = SubtitleProfile_Method.Encode })
+            // The player shows only subtitles delivered as files (External), through
+            // TextSubtitlePresenter, which fetches each as SRT from the subtitle endpoint. External
+            // leaves the video alone: direct play stays possible and an HLS stream can copy the video.
+            // The server first takes a profile of the stream's own format and otherwise converts to
+            // one, but never out of ASS or SSA (MediaStream.SupportsSubtitleConversionTo), so those
+            // need their own entries; another text codec is converted to SRT when the server can
+            // extract it (SupportsExternalStream). Image formats are Encode (burned in), as is
+            // anything no profile matches. Embed would leave a subtitle invisible: the presenter
+            // disables a stream's in-band subtitle tracks.
+            return TextSubtitleFormats
+                .Select(format => new SubtitleProfile { Format = format, Method = SubtitleProfile_Method.External })
+                .Concat(ImageSubtitleFormats
+                    .Select(format => new SubtitleProfile { Format = format, Method = SubtitleProfile_Method.Encode }))
                 .ToList();
         }
 

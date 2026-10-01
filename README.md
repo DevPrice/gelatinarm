@@ -175,8 +175,13 @@ The 4K edition has three settings for it under **Settings → Playback**:
 
 ### Subtitles
 
-The Xbox player draws no subtitles. A selected subtitle (SRT, ASS/SSA, VTT, PGS,
-VobSub, DVB) is burned in by the server, which transcodes the video.
+Text subtitles (SRT, ASS/SSA, VTT and other text formats, embedded or external)
+are **drawn by the console** as plain text: the server sends them as SRT, so
+ASS/SSA styling and positioning are dropped. Choosing, switching or turning off a
+text subtitle does not affect direct play and does not restart the stream.
+
+Image subtitles (PGS, VobSub, DVB) are **burned into the video by the server**,
+which turns a direct play into a server transcode and restarts the stream.
 
 ## Video Resolution
 
@@ -192,7 +197,8 @@ The two editions install side by side; see [Docs/DEV_SETUP.md](Docs/DEV_SETUP.md
 
 ## Known Limitations
 
-- **Subtitles** - Burned in by the server; choosing or changing one restarts the stream as a transcode.
+- **Subtitle styling** - Text subtitles are shown as plain text; ASS/SSA styling and positioning are dropped.
+- **Image subtitles are burned in** - PGS, VobSub and DVB subtitles are burned into the video by the server. That requires a video transcode, and choosing or leaving one restarts the stream.
 - **Audio track switching** - A direct-played file switches audio track inside the player when the console can decode the new track. Otherwise, and on a server stream, playback restarts with the server supplying that track.
 - **Remote connections** - If your server sees the Xbox as a remote client, its internet streaming bitrate limit applies and high-bitrate files are transcoded. Configure your server's LAN networks if the Xbox is on your home network.
 

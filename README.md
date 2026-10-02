@@ -28,7 +28,7 @@ A native Jellyfin client for Xbox One and Xbox Series X|S consoles, built with U
 - **HDR support** - HDR10 (all Xbox models), HDR10+, HLG, and Dolby Vision Profile 8.1 (Xbox Series S/X only)
 - **Auto-Play Next Episode** - Seamlessly continue to the next episode
 - **Episode Shuffle Mode** - Random episode playback for your favorite shows
-- **Multiple Audio & Subtitle Tracks** - Switch languages and subtitles during playback (the stream restarts from the server at the same position)
+- **Multiple Audio & Subtitle Tracks** - Switch languages and subtitles during playback (text subtitles switch in place; other changes restart the stream from the server at the same position)
 - **Server streaming fallback** - Anything the Xbox can't play directly is remuxed or transcoded by your server over HLS
 - **Buffering optimization** - Smart buffering for smooth playback
 - **Profile Switching** - Switch between different users on the same server, keeping settings, playback history, etc. separate

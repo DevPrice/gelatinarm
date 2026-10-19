@@ -180,8 +180,12 @@ playback never started. Text subtitles are declared `External` as WebVTT, ASS
 and SSA: the server converts SRT to WebVTT, sends the file beside the stream, and
 `PlaybackControlService` adds it as a `TimedTextSource` that the player draws; its
 cues are moved by the HLS manifest offset, since the file counts from the start
-of the item and the player from the start of its manifest.
-Picture subtitles are declared `Encode` (burned in by the server). In a direct play the audio track is selected
+of the item and the player from the start of its manifest. Switching between text
+subtitles, or to none, stays in the player (`TrySelectPlayerSubtitle`): each file
+is fetched when first shown and kept for the stream, and only the shown one is
+`PlatformPresented`.
+Picture subtitles are declared `Encode` (burned in by the server), so choosing one
+or leaving one reopens the stream. In a direct play the audio track is selected
 in the player (`MediaPlaybackItem.AudioTracks`, by position among the file's
 audio streams); a server stream carries one track, so switching reopens it. Two
 server rules:

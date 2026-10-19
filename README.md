@@ -43,7 +43,7 @@ A native Jellyfin client for Xbox One and Xbox Series X|S consoles, built with U
 - **HDR support** - HDR10 (all Xbox models), HDR10+, HLG, and Dolby Vision profiles 8.1 and 8.4 (Xbox Series S/X only)
 - **Auto-Play Next Episode** - Seamlessly continue to the next episode
 - **Episode Shuffle Mode** - Random episode playback for your favorite shows
-- **Multiple Audio & Subtitle Tracks** - Switch languages and subtitles during playback (a direct-played file switches audio inside the player; otherwise the stream restarts from the server at the same position)
+- **Multiple Audio & Subtitle Tracks** - Switch languages and subtitles during playback (a direct-played file switches audio inside the player, and text subtitles switch without a restart; otherwise the stream restarts from the server at the same position)
 - **Server streaming fallback** - Anything the Xbox can't play directly is remuxed or transcoded by your server over HLS
 - **Buffering optimization** - Smart buffering for smooth playback
 - **Profile Switching** - Switch between users, on one server or several, keeping settings, playback history, etc. separate
@@ -178,7 +178,8 @@ The 4K edition has three settings for it under **Settings → Playback**:
 Text subtitles (SRT, ASS/SSA, VTT) are drawn by the Xbox player from a file the
 server sends beside the video, so a file that direct plays still direct plays,
 HDR included. SRT arrives converted to WebVTT, ASS/SSA as it is, since the server
-does not convert those. Picture subtitles (PGS, VobSub, DVB) are burned in by the server, which transcodes
+does not convert those. Turning one on or off, or changing to another, happens in
+the player without restarting the stream. Picture subtitles (PGS, VobSub, DVB) are burned in by the server, which transcodes
 the video.
 
 ## Video Resolution
@@ -195,7 +196,7 @@ The two editions install side by side; see [Docs/DEV_SETUP.md](Docs/DEV_SETUP.md
 
 ## Known Limitations
 
-- **Subtitles** - Choosing or changing one restarts the stream. Picture subtitles (PGS, VobSub, DVB) are burned in by the server, which means a transcode.
+- **Subtitles** - Choosing a picture subtitle, or changing away from one, restarts the stream. Picture subtitles (PGS, VobSub, DVB) are burned in by the server, which means a transcode.
 - **Audio track switching** - A direct-played file switches audio track inside the player when the console can decode the new track. Otherwise, and on a server stream, playback restarts with the server supplying that track.
 - **Remote connections** - If your server sees the Xbox as a remote client, its internet streaming bitrate limit applies and high-bitrate files are transcoded. Configure your server's LAN networks if the Xbox is on your home network.
 

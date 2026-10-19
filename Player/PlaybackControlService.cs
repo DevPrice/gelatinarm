@@ -74,6 +74,13 @@ namespace Gelatinarm.Player
         /// </summary>
         Task ChangeAudioTrackAsync(AudioTrack audioTrack);
 
+        /// <summary>
+        ///     Shows <paramref name="subtitle" /> (or none) from a file beside the stream, with no
+        ///     restart. False when the server burns the current or the chosen subtitle into the
+        ///     video; then <see cref="ChangeSubtitleTrackAsync" />.
+        /// </summary>
+        bool TrySelectPlayerSubtitle(SubtitleTrack subtitle);
+
         Task ChangeSubtitleTrackAsync(SubtitleTrack subtitle);
 
         MediaSourceInfo GetCurrentMediaSource();
@@ -133,7 +140,10 @@ namespace Gelatinarm.Player
         private MediaPlayer _mediaPlayer;
         private MediaSource _openStream;
         private MediaPlaybackItem _playbackItem;
-        private readonly HashSet<string> _externalSubtitleTrackIds = new HashSet<string>();
+        // Track Id to the server stream index of the subtitle file it came from
+        private readonly Dictionary<string, int> _externalSubtitleTracks = new Dictionary<string, int>();
+        private readonly Dictionary<int, TimedTextSource> _externalSubtitleSources = new Dictionary<int, TimedTextSource>();
+        private int? _shownExternalSubtitle;
         private readonly List<ExternalSubtitleCue> _externalSubtitleCues = new List<ExternalSubtitleCue>();
         private TimeSpan _appliedSubtitleOffset;
         private TimeSpan _hlsManifestOffset;
@@ -312,26 +322,62 @@ namespace Gelatinarm.Player
         // With no subtitle asked for, the server applies the file's default one
         private void AddExternalSubtitle(MediaSource mediaSource)
         {
-            lock (_externalSubtitleTrackIds)
+            ClearExternalSubtitles();
+
+            var serverStreamIndex = _playbackParams.SubtitleStreamIndex ?? _currentMediaSource.DefaultSubtitleStreamIndex;
+            if (serverStreamIndex >= 0 && LoadExternalSubtitle(mediaSource, serverStreamIndex.Value))
             {
-                _externalSubtitleTrackIds.Clear();
+                lock (_externalSubtitleTracks)
+                {
+                    _shownExternalSubtitle = serverStreamIndex;
+                }
+            }
+        }
+
+        private void ClearExternalSubtitles()
+        {
+            lock (_externalSubtitleTracks)
+            {
+                _externalSubtitleTracks.Clear();
+                _externalSubtitleSources.Clear();
                 _externalSubtitleCues.Clear();
                 _appliedSubtitleOffset = TimeSpan.Zero;
+                _shownExternalSubtitle = null;
+            }
+        }
+
+        // Each file is fetched once per stream, when first shown, and kept so switching back costs
+        // nothing. Not all up front: the server extracts an embedded subtitle by reading the whole
+        // file. False when the server sends no file for this subtitle (it burns it in).
+        private bool LoadExternalSubtitle(MediaSource mediaSource, int serverStreamIndex)
+        {
+            lock (_externalSubtitleTracks)
+            {
+                if (_externalSubtitleSources.ContainsKey(serverStreamIndex))
+                {
+                    return true;
+                }
             }
 
-            var url = _sourceResolver.BuildExternalSubtitleUrl(_currentMediaSource,
-                _playbackParams.SubtitleStreamIndex ?? _currentMediaSource.DefaultSubtitleStreamIndex);
+            var url = _sourceResolver.BuildExternalSubtitleUrl(_currentMediaSource, serverStreamIndex);
             if (url == null)
             {
-                return;
+                return false;
             }
 
             var subtitles = TimedTextSource.CreateFromUri(new Uri(url));
-            subtitles.Resolved += OnExternalSubtitleResolved;
+            subtitles.Resolved += (sender, args) => OnExternalSubtitleResolved(sender, serverStreamIndex, args);
+            lock (_externalSubtitleTracks)
+            {
+                _externalSubtitleSources[serverStreamIndex] = subtitles;
+            }
+
             mediaSource.ExternalTimedTextSources.Add(subtitles);
+            return true;
         }
 
-        private void OnExternalSubtitleResolved(TimedTextSource sender, TimedTextSourceResolveResultEventArgs args)
+        private void OnExternalSubtitleResolved(TimedTextSource sender, int serverStreamIndex,
+            TimedTextSourceResolveResultEventArgs args)
         {
             if (args.Error != null)
             {
@@ -340,21 +386,30 @@ namespace Gelatinarm.Player
                 return;
             }
 
-            lock (_externalSubtitleTrackIds)
+            lock (_externalSubtitleTracks)
             {
+                // A file still loading when its stream was replaced
+                if (!_externalSubtitleSources.TryGetValue(serverStreamIndex, out var current) || current != sender)
+                {
+                    return;
+                }
+
                 foreach (var track in args.Tracks)
                 {
-                    _externalSubtitleTrackIds.Add(track.Id);
+                    _externalSubtitleTracks[track.Id] = serverStreamIndex;
                     StyleCues(track);
                     foreach (var cue in track.Cues.OfType<TimedTextCue>())
                     {
-                        _externalSubtitleCues.Add(new ExternalSubtitleCue
+                        var entry = new ExternalSubtitleCue
                         {
                             Track = track,
                             Cue = cue,
                             ItemStart = cue.StartTime,
                             InTrack = true
-                        });
+                        };
+                        _externalSubtitleCues.Add(entry);
+                        // A file chosen after the offset was applied would otherwise keep item times
+                        PlaceCue(entry, _appliedSubtitleOffset);
                     }
                 }
             }
@@ -373,7 +428,7 @@ namespace Gelatinarm.Player
         // or an untouched transcode, where the offset stays zero.
         private void AlignExternalSubtitleCues()
         {
-            lock (_externalSubtitleTrackIds)
+            lock (_externalSubtitleTracks)
             {
                 var offset = _hlsManifestOffset;
                 if (_externalSubtitleCues.Count == 0 || offset == _appliedSubtitleOffset)
@@ -381,32 +436,39 @@ namespace Gelatinarm.Player
                     return;
                 }
 
-                var dropped = 0;
-                foreach (var entry in _externalSubtitleCues)
-                {
-                    if (entry.InTrack)
-                    {
-                        entry.Track.RemoveCue(entry.Cue);
-                        entry.InTrack = false;
-                    }
-
-                    var start = entry.ItemStart - offset;
-                    if (start < TimeSpan.Zero)
-                    {
-                        dropped++;
-                        continue;
-                    }
-
-                    entry.Cue.StartTime = start;
-                    entry.Track.AddCue(entry.Cue);
-                    entry.InTrack = true;
-                }
+                var dropped = _externalSubtitleCues.Count(entry => !PlaceCue(entry, offset));
 
                 _appliedSubtitleOffset = offset;
                 Logger.LogInformation(
                     "Subtitle cues moved to follow the manifest starting at {Offset:hh\\:mm\\:ss}; {Dropped} of {Total} fall before it",
                     offset, dropped, _externalSubtitleCues.Count);
             }
+        }
+
+        // False when the cue falls before the manifest's start and is left out
+        private static bool PlaceCue(ExternalSubtitleCue entry, TimeSpan offset)
+        {
+            if (offset == TimeSpan.Zero && entry.InTrack && entry.Cue.StartTime == entry.ItemStart)
+            {
+                return true;
+            }
+
+            if (entry.InTrack)
+            {
+                entry.Track.RemoveCue(entry.Cue);
+                entry.InTrack = false;
+            }
+
+            var start = entry.ItemStart - offset;
+            if (start < TimeSpan.Zero)
+            {
+                return false;
+            }
+
+            entry.Cue.StartTime = start;
+            entry.Track.AddCue(entry.Cue);
+            entry.InTrack = true;
+            return true;
         }
 
         // The Xbox player draws plain white text, unreadable on a bright picture, so every cue
@@ -456,7 +518,8 @@ namespace Gelatinarm.Player
         }
 
         // Whichever comes first, the subtitle file being read or its track joining the item, the
-        // other one shows it. Tracks inside the file stay hidden.
+        // other one shows it; the files of other subtitles are hidden. Tracks inside the file stay
+        // hidden.
         private void PresentExternalSubtitle(MediaPlaybackItem playbackItem)
         {
             var tracks = playbackItem?.TimedMetadataTracks;
@@ -465,13 +528,15 @@ namespace Gelatinarm.Player
                 return;
             }
 
-            lock (_externalSubtitleTrackIds)
+            lock (_externalSubtitleTracks)
             {
                 for (var i = 0; i < tracks.Count; i++)
                 {
-                    if (_externalSubtitleTrackIds.Contains(tracks[i].Id))
+                    if (_externalSubtitleTracks.TryGetValue(tracks[i].Id, out var serverStreamIndex))
                     {
-                        tracks.SetPresentationMode((uint)i, TimedMetadataTrackPresentationMode.PlatformPresented);
+                        tracks.SetPresentationMode((uint)i, serverStreamIndex == _shownExternalSubtitle
+                            ? TimedMetadataTrackPresentationMode.PlatformPresented
+                            : TimedMetadataTrackPresentationMode.Disabled);
                     }
                 }
             }
@@ -778,10 +843,50 @@ namespace Gelatinarm.Player
                 audioStreamIndex: audioTrack.ServerStreamIndex);
         }
 
+        public bool TrySelectPlayerSubtitle(SubtitleTrack subtitle)
+        {
+            var mediaSource = _openStream;
+            var playbackItem = _playbackItem;
+            if (mediaSource == null || playbackItem == null ||
+                IsBurnedIn(_playbackParams.SubtitleStreamIndex ?? _currentMediaSource?.DefaultSubtitleStreamIndex))
+            {
+                return false;
+            }
+
+            var serverStreamIndex = subtitle.IsNoneOption ? null : (int?)subtitle.ServerStreamIndex;
+            if (serverStreamIndex.HasValue && !LoadExternalSubtitle(mediaSource, serverStreamIndex.Value))
+            {
+                Logger.LogInformation("The server burns in subtitle stream {ServerStreamIndex}; restarting the stream",
+                    serverStreamIndex);
+                return false;
+            }
+
+            lock (_externalSubtitleTracks)
+            {
+                _shownExternalSubtitle = serverStreamIndex;
+            }
+
+            PresentExternalSubtitle(playbackItem);
+
+            // The progress reports and any later restart name the subtitle shown; -1 asks for none
+            _playbackParams.SubtitleStreamIndex = serverStreamIndex ?? -1;
+            Logger.LogInformation("Player shows subtitle {SubtitleDisplayTitle} without a restart", subtitle.DisplayTitle);
+            return true;
+        }
+
+        // Every subtitle stream reports a delivery method, chosen or not, so only the one the
+        // stream was opened with tells whether the video carries it
+        private bool IsBurnedIn(int? serverStreamIndex)
+        {
+            var subtitle = _currentMediaSource?.MediaStreams?.FirstOrDefault(s =>
+                s.Type == MediaStream_Type.Subtitle && s.Index == serverStreamIndex);
+            return subtitle?.DeliveryMethod == MediaStream_DeliveryMethod.Encode;
+        }
+
         public Task ChangeSubtitleTrackAsync(SubtitleTrack subtitle)
         {
-            // The server decides per subtitle whether it is burned in or sent beside the stream,
-            // so enabling, changing and disabling all restart the stream; -1 asks for none.
+            // Only when the server burns in the current or the chosen subtitle, which
+            // TrySelectPlayerSubtitle cannot show. A -1 index asks for none.
             return RestartPlaybackAsync(
                 $"subtitle change to {subtitle.DisplayTitle}",
                 subtitleStreamIndex: subtitle.IsNoneOption ? -1 : subtitle.ServerStreamIndex);
@@ -818,11 +923,7 @@ namespace Gelatinarm.Player
             _openStream?.Dispose();
             _openStream = null;
             _playbackItem = null;
-            lock (_externalSubtitleTrackIds)
-            {
-                _externalSubtitleCues.Clear();
-                _appliedSubtitleOffset = TimeSpan.Zero;
-            }
+            ClearExternalSubtitles();
         }
 
         public void ReleasePlayer(MediaPlayer player)
